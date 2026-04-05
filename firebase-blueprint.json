@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user profile information and daily progress summary.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique user ID from Firebase Auth." },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "streak": { "type": "integer", "description": "Current daily typing streak." },
+        "lastTestDate": { "type": "string", "format": "date", "description": "Date of the last test taken." },
+        "maxStreak": { "type": "integer", "description": "Highest streak achieved." }
+      },
+      "required": ["uid", "email"]
+    },
+    "TestResult": {
+      "title": "Typing Test Result",
+      "description": "Stores individual typing test results for analysis.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "The user who took the test." },
+        "examType": { "type": "string", "enum": ["RRB", "SSC"] },
+        "wpm": { "type": "number" },
+        "accuracy": { "type": "number" },
+        "errors": { "type": "integer" },
+        "totalChars": { "type": "integer" },
+        "timeElapsed": { "type": "integer" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "examType", "wpm", "accuracy", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": "User",
+      "description": "User profile documents."
+    },
+    "/testResults/{resultId}": {
+      "schema": "TestResult",
+      "description": "Individual test result records."
+    }
+  }
+}
