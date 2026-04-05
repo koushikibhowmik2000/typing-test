@@ -14,7 +14,11 @@ export interface TypingState {
   isActive: boolean;
   isFinished: boolean;
   startTime: number | null;
-  currentIndex: number;
+  currentWordIndex: number;
   userInput: string;
   errors: number;
+  incorrectWords: { expected: string; actual: string; index: number }[];
+  originalText: string;
+  backspaceCount: number;
+  mistypedKeys: Record<string, number>;
 }

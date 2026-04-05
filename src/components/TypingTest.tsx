@@ -1,34 +1,50 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Timer, Keyboard, Award, RotateCcw, AlertCircle, CheckCircle2, ChevronRight, Volume2, VolumeX, ArrowLeft, Play, XCircle, Music } from 'lucide-react';
+import { Timer, Keyboard, Award, RotateCcw, AlertCircle, CheckCircle2, ChevronRight, Volume2, VolumeX, ArrowLeft, Play, XCircle, Music, Trophy } from 'lucide-react';
 import { EXAM_TEXTS } from '../constants/texts';
 import { ExamType, TestStats, TypingState } from '../types';
 import { cn } from '../lib/utils';
 import confetti from 'canvas-confetti';
-import { auth, saveTestResult } from '../firebase';
+import { auth, saveTestResult, getUserResults } from '../firebase';
+import { ACHIEVEMENTS, getUnlockedAchievementIds, Achievement } from '../lib/achievements';
 
-const TypingTest: React.FC = () => {
+interface TypingTestProps {
+  results: any[];
+  profile: any;
+}
+
+const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
   const [examType, setExamType] = useState<ExamType | null>(null);
-  const [text, setText] = useState('');
+  const [textWords, setTextWords] = useState<string[]>([]);
   const [state, setState] = useState<TypingState>({
     isActive: false,
     isFinished: false,
     startTime: null,
-    currentIndex: 0,
+    currentWordIndex: 0,
     userInput: '',
     errors: 0,
+    incorrectWords: [],
+    originalText: '',
+    backspaceCount: 0,
+    mistypedKeys: {},
   });
   const [timeLeft, setTimeLeft] = useState(15 * 60);
   const [stats, setStats] = useState<TestStats | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [justUnlocked, setJustUnlocked] = useState<Achievement[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const typingAreaRef = useRef<HTMLDivElement>(null);
+  const activeWordRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    activeWordRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [state.currentWordIndex]);
 
   useEffect(() => {
     const audio = new Audio('https://res.cloudinary.com/speed-searches/video/upload/v1775368031/ntpctyping_ssctyping_typingsound_railwaytyping_TYPING_SOUND_TYPING_HALL_ENVIRONMENT_SOUND_onh0pq.mp3');
@@ -41,8 +57,12 @@ const TypingTest: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    // Scroll effect removed to prevent text box from being hidden
-  }, [state.currentIndex]);
+    if (auth.currentUser) {
+      getUserResults(auth.currentUser.uid, (results) => {
+        // Results are passed as props now, no need to fetch here
+      });
+    }
+  }, [auth.currentUser]);
   const initiateTest = (type: ExamType) => {
     setExamType(type);
     setCountdown(5);
@@ -62,14 +82,18 @@ const TypingTest: React.FC = () => {
 
   const startTest = () => {
     const randomText = EXAM_TEXTS[Math.floor(Math.random() * EXAM_TEXTS.length)];
-    setText(randomText);
+    setTextWords(randomText.split(' '));
     setState({
       isActive: true,
       isFinished: false,
       startTime: Date.now(),
-      currentIndex: 0,
+      currentWordIndex: 0,
       userInput: '',
       errors: 0,
+      incorrectWords: [],
+      originalText: randomText,
+      backspaceCount: 0,
+      mistypedKeys: {},
     });
     setTimeLeft(getDuration(examType));
     setStats(null);
@@ -107,11 +131,16 @@ const TypingTest: React.FC = () => {
       isActive: false,
       isFinished: false,
       startTime: null,
-      currentIndex: 0,
+      currentWordIndex: 0,
       userInput: '',
       errors: 0,
+      incorrectWords: [],
+      originalText: '',
+      backspaceCount: 0,
+      mistypedKeys: {},
     });
     setStats(null);
+    setJustUnlocked([]);
     if (timerRef.current) clearInterval(timerRef.current);
   };
 
@@ -150,15 +179,27 @@ const TypingTest: React.FC = () => {
     const finalStats = calculateStats(duration);
     
     if (auth.currentUser && finalStats) {
-      await saveTestResult(auth.currentUser.uid, {
+      const newResult = {
         examType,
         wpm: finalStats.netWpm,
         accuracy: finalStats.accuracy,
         errors: finalStats.errors,
         totalChars: finalStats.totalChars,
         timeElapsed: duration - timeLeft,
-        isEarlyEnd: isEarly
-      });
+        isEarlyEnd: isEarly,
+        backspaceCount: state.backspaceCount,
+        mistypedKeys: state.mistypedKeys,
+      };
+
+      const oldUnlocked = getUnlockedAchievementIds(results, profile);
+      const newUnlocked = getUnlockedAchievementIds([newResult, ...results], profile);
+      const newlyUnlockedIds = newUnlocked.filter(id => !oldUnlocked.includes(id));
+      
+      if (newlyUnlockedIds.length > 0) {
+        setJustUnlocked(ACHIEVEMENTS.filter(a => newlyUnlockedIds.includes(a.id)));
+      }
+
+      await saveTestResult(auth.currentUser.uid, newResult);
     }
 
     confetti({
@@ -169,29 +210,21 @@ const TypingTest: React.FC = () => {
   };
 
   const calculateStats = (duration: number) => {
+    const totalChars = state.userInput.length; // This needs to be updated for word-based typing
+    const wordsTyped = state.currentWordIndex;
     const timeInMinutes = (duration - timeLeft) / 60 || 0.01;
-    const totalChars = state.userInput.length;
-    const wordsTyped = totalChars / 5;
     const grossWpm = Math.round(wordsTyped / timeInMinutes);
     
-    let correctChars = 0;
-    for (let i = 0; i < state.userInput.length; i++) {
-      if (state.userInput[i] === text[i]) {
-        correctChars++;
-      }
-    }
-    
-    const netWpm = Math.round((correctChars / 5) / timeInMinutes);
-    const accuracy = totalChars > 0 ? Math.round((correctChars / totalChars) * 100) : 0;
+    const accuracy = state.currentWordIndex > 0 ? Math.round(((state.currentWordIndex - state.incorrectWords.length) / state.currentWordIndex) * 100) : 0;
 
     const finalStats = {
-      wpm: netWpm,
+      wpm: Math.round(((state.currentWordIndex - state.incorrectWords.length) / 5) / timeInMinutes),
       accuracy,
       errors: state.errors,
-      totalChars,
+      totalChars: state.originalText.length,
       timeElapsed: duration - timeLeft,
       grossWpm,
-      netWpm
+      netWpm: Math.round(((state.currentWordIndex - state.incorrectWords.length) / 5) / timeInMinutes)
     };
     setStats(finalStats);
     return finalStats;
@@ -201,27 +234,37 @@ const TypingTest: React.FC = () => {
     if (!state.isActive || state.isFinished) return;
 
     const value = e.target.value;
-    
+
+    // Prevent double spaces
+    if (value.endsWith('  ')) return;
+
+    // RRB Mode: Disable backspace
     if (examType === 'RRB' && value.length < state.userInput.length) {
       return;
     }
 
-    const lastChar = value[value.length - 1];
-    const expectedChar = text[value.length - 1];
-    
-    let newErrors = state.errors;
-    if (value.length > state.userInput.length && lastChar !== expectedChar) {
-      newErrors++;
+    const typedWords = value.split(' ');
+    const currentWordIndex = typedWords.length - 1;
+
+    let errors = 0;
+    const incorrectWords: { expected: string; actual: string; index: number }[] = [];
+
+    for (let i = 0; i < typedWords.length - 1; i++) {
+      if (typedWords[i] !== textWords[i]) {
+        errors++;
+        incorrectWords.push({ expected: textWords[i], actual: typedWords[i], index: i });
+      }
     }
 
     setState(prev => ({
       ...prev,
       userInput: value,
-      currentIndex: value.length,
-      errors: newErrors
+      currentWordIndex,
+      errors,
+      incorrectWords
     }));
 
-    if (value.length === text.length) {
+    if (typedWords.length > textWords.length) {
       finishTest();
     }
   };
@@ -269,7 +312,7 @@ const TypingTest: React.FC = () => {
                 <li className="flex items-center gap-2"><CheckCircle2 size={16} className="text-green-500" /> Full Backspace Support</li>
                 <li className="flex items-center gap-2"><CheckCircle2 size={16} className="text-green-500" /> Real-time Accuracy Tracking</li>
               </ul>
-              <button className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
+              <button className="w-full mt-4 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-full transition-all shadow-lg hover:shadow-blue-500/30">
                 Start SSC Test <ChevronRight size={18} />
               </button>
             </div>
@@ -287,7 +330,7 @@ const TypingTest: React.FC = () => {
                 <li className="flex items-center gap-2"><AlertCircle size={16} className="text-orange-500" /> Backspace Disabled</li>
                 <li className="flex items-center gap-2"><CheckCircle2 size={16} className="text-green-500" /> Focus on First-time Accuracy</li>
               </ul>
-              <button className="btn-primary bg-orange-600 hover:bg-orange-700 w-full mt-4 flex items-center justify-center gap-2">
+              <button className="w-full mt-4 flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-6 rounded-full transition-all shadow-lg hover:shadow-orange-500/30">
                 Start RRB Test <ChevronRight size={18} />
               </button>
             </div>
@@ -345,6 +388,26 @@ const TypingTest: React.FC = () => {
               </motion.div>
             </div>
 
+            <div className="text-left bg-gray-50 dark:bg-gray-900 p-6 rounded-2xl border border-gray-100 dark:border-gray-800">
+              <h3 className="text-lg font-bold mb-4">Your Typed Text</h3>
+              <p className="text-lg leading-relaxed">
+                {state.userInput.trim().split(/\s+/).map((typedWord, index) => {
+                  if (!typedWord) return null;
+                  const expectedWord = textWords[index];
+                  const isCorrect = typedWord === expectedWord;
+                  
+                  if (!isCorrect && expectedWord) {
+                    return (
+                      <span key={index} className="text-red-500 font-bold">
+                        {typedWord} <span className="opacity-75">({expectedWord})</span>{' '}
+                      </span>
+                    );
+                  }
+                  return <span key={index} className="text-gray-900 dark:text-white">{typedWord}{' '}</span>;
+                })}
+              </p>
+            </div>
+
             <div className="flex flex-col md:flex-row gap-4 justify-center pt-6">
               <button onClick={() => initiateTest(examType)} className="btn-primary flex items-center gap-2">
                 <RotateCcw size={18} /> Retake Test
@@ -353,6 +416,35 @@ const TypingTest: React.FC = () => {
                 Back to Selection
               </button>
             </div>
+
+            {/* Achievement Popup */}
+            <AnimatePresence>
+              {justUnlocked.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: 50 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  className="fixed bottom-8 right-8 z-50 flex flex-col gap-4"
+                >
+                  {justUnlocked.map((achievement) => (
+                    <div key={achievement.id} className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-yellow-200 dark:border-yellow-900/50 p-4 flex items-center gap-4 min-w-[300px] relative overflow-hidden">
+                      <div className="absolute top-0 left-0 w-1 h-full bg-yellow-400"></div>
+                      <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-xl text-3xl">
+                        {achievement.icon}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-xs font-bold text-yellow-600 dark:text-yellow-500 uppercase tracking-wider mb-1">Achievement Unlocked!</p>
+                        <h4 className="font-bold text-gray-900 dark:text-white">{achievement.title}</h4>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">{achievement.description}</p>
+                      </div>
+                      <button onClick={() => setJustUnlocked(prev => prev.filter(a => a.id !== achievement.id))} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                        <XCircle size={20} />
+                      </button>
+                    </div>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
         ) : (
           <motion.div 
@@ -430,27 +522,25 @@ const TypingTest: React.FC = () => {
             <div ref={typingAreaRef} className="exam-card dark:bg-gray-800 dark:border-gray-700 p-8 space-y-6 shadow-xl">
               <div 
                 ref={scrollRef}
-                className="relative text-2xl leading-relaxed font-mono text-gray-400 dark:text-gray-600 select-none h-72 overflow-y-auto pr-4 custom-scrollbar bg-gray-50/50 dark:bg-gray-900/30 p-6 rounded-xl border border-gray-100 dark:border-gray-800"
+                className="relative text-2xl leading-relaxed font-mono text-gray-400 dark:text-gray-600 select-none h-72 overflow-y-auto pr-4 custom-scrollbar bg-gray-50/50 dark:bg-gray-900/30 p-6 rounded-xl border border-gray-100 dark:border-gray-800 block"
               >
-                {text.split('').map((char, index) => {
+                {textWords.map((word, index) => {
                   let color = 'text-gray-400 dark:text-gray-500';
                   let underline = '';
                   
-                  if (index < state.userInput.length) {
-                    const isCorrect = state.userInput[index] === text[index];
-                    color = isCorrect 
-                      ? 'text-green-600 dark:text-green-400 font-bold' 
-                      : 'text-white bg-red-500 rounded-sm px-0.5';
+                  if (index < state.currentWordIndex) {
+                    // Word already typed, no green effect
+                    color = 'text-gray-800 dark:text-gray-200';
                   }
                   
-                  if (index === state.userInput.length) {
+                  if (index === state.currentWordIndex) {
                     underline = 'bg-blue-100 dark:bg-blue-900/40 border-b-2 border-blue-500 animate-pulse';
                     color = 'text-gray-900 dark:text-white font-bold';
                   }
 
                   return (
-                    <span key={index} className={cn(color, underline)}>
-                      {char}
+                    <span key={index} ref={index === state.currentWordIndex ? activeWordRef : null} className={cn(color, underline, "mr-2 inline-block mb-2")}>
+                      {word}
                     </span>
                   );
                 })}
@@ -460,6 +550,22 @@ const TypingTest: React.FC = () => {
                 ref={inputRef}
                 value={state.userInput}
                 onChange={handleInput}
+                onKeyDown={(e) => {
+                  if (e.key === 'Backspace') {
+                    setState(prev => ({ ...prev, backspaceCount: prev.backspaceCount + 1 }));
+                  } else if (e.key.length === 1 && state.userInput.length < state.originalText.length) {
+                    const expectedChar = state.originalText[state.userInput.length];
+                    if (e.key !== expectedChar) {
+                      setState(prev => ({
+                        ...prev,
+                        mistypedKeys: {
+                          ...prev.mistypedKeys,
+                          [expectedChar.toLowerCase()]: (prev.mistypedKeys[expectedChar.toLowerCase()] || 0) + 1
+                        }
+                      }));
+                    }
+                  }
+                }}
                 disabled={!state.isActive}
                 className="w-full h-32 p-4 border-2 border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-white rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900 outline-none transition-all font-mono text-lg resize-none"
                 placeholder="Start typing here..."
@@ -469,7 +575,7 @@ const TypingTest: React.FC = () => {
 
             <div className="flex justify-between items-center text-sm text-gray-500 dark:text-gray-400 px-2">
               <div className="flex gap-6">
-                <span>Characters: {state.userInput.length} / {text.length}</span>
+                <span>Words: {state.currentWordIndex} / {textWords.length}</span>
                 <span>Errors: <span className="text-red-500 font-bold">{state.errors}</span></span>
               </div>
               <div className="flex items-center gap-2">
