@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Timer, Keyboard, Award, RotateCcw, AlertCircle, CheckCircle2, ChevronRight, Volume2, VolumeX, ArrowLeft, Play, XCircle } from 'lucide-react';
+import { Timer, Keyboard, Award, RotateCcw, AlertCircle, CheckCircle2, ChevronRight, Volume2, VolumeX, ArrowLeft, Play, XCircle, Music } from 'lucide-react';
 import { EXAM_TEXTS } from '../constants/texts';
 import { ExamType, TestStats, TypingState } from '../types';
 import { cn } from '../lib/utils';
@@ -22,20 +22,27 @@ const TypingTest: React.FC = () => {
   const [stats, setStats] = useState<TestStats | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const typingAreaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      const activeChar = scrollRef.current.querySelector('.animate-pulse');
-      if (activeChar) {
-        activeChar.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }
-  }, [state.currentIndex]);
+    const audio = new Audio('https://res.cloudinary.com/speed-searches/video/upload/v1775368031/ntpctyping_ssctyping_typingsound_railwaytyping_TYPING_SOUND_TYPING_HALL_ENVIRONMENT_SOUND_onh0pq.mp3');
+    audio.loop = true;
+    audioRef.current = audio;
+    return () => {
+      audio.pause();
+      audio.src = '';
+    };
+  }, []);
 
+  useEffect(() => {
+    // Scroll effect removed to prevent text box from being hidden
+  }, [state.currentIndex]);
   const initiateTest = (type: ExamType) => {
     setExamType(type);
     setCountdown(5);
@@ -67,12 +74,33 @@ const TypingTest: React.FC = () => {
     setTimeLeft(getDuration(examType));
     setStats(null);
     
+    console.log('TypingTest: startTest called, audioRef.current:', audioRef.current);
+    if (audioRef.current) {
+      console.log('TypingTest: Attempting to play audio');
+      try {
+        audioRef.current.play();
+        setIsPlayingAudio(true);
+      } catch (e) {
+        console.error('TypingTest: Error playing audio:', e);
+      }
+    }
+
     setTimeout(() => {
+      typingAreaRef.current?.scrollIntoView({ behavior: 'smooth' });
       inputRef.current?.focus();
     }, 100);
   };
 
   const resetTest = () => {
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+        setIsPlayingAudio(false);
+      } catch (e) {
+        console.error('TypingTest: Error pausing audio:', e);
+      }
+    }
     setExamType(null);
     setCountdown(null);
     setState({
@@ -107,6 +135,15 @@ const TypingTest: React.FC = () => {
   }, [state.isActive]);
 
   const finishTest = async () => {
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+        setIsPlayingAudio(false);
+      } catch (e) {
+        console.error('TypingTest: Error pausing audio:', e);
+      }
+    }
     const duration = getDuration(examType);
     const isEarly = timeLeft > 0;
     setState(prev => ({ ...prev, isActive: false, isFinished: true }));
@@ -342,6 +379,32 @@ const TypingTest: React.FC = () => {
               </div>
               <div className="flex items-center gap-4">
                 <button 
+                  onClick={() => {
+                    if (isPlayingAudio) {
+                      try {
+                        audioRef.current?.pause();
+                        audioRef.current!.currentTime = 0;
+                      } catch (e) {
+                        console.error('TypingTest: Error pausing audio:', e);
+                      }
+                    } else {
+                      try {
+                        audioRef.current?.play();
+                      } catch (e) {
+                        console.error('TypingTest: Error playing audio:', e);
+                      }
+                    }
+                    setIsPlayingAudio(!isPlayingAudio);
+                  }}
+                  className={cn(
+                    "p-2 transition-colors",
+                    isPlayingAudio ? "text-blue-500" : "text-gray-400 hover:text-blue-500"
+                  )}
+                  title={isPlayingAudio ? "Pause Background Audio" : "Play Background Audio"}
+                >
+                  <Music size={20} />
+                </button>
+                <button 
                   onClick={finishTest}
                   className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-md transition-colors text-sm font-bold"
                   title="End Test Early"
@@ -361,7 +424,10 @@ const TypingTest: React.FC = () => {
               </div>
             </div>
 
-            <div className="exam-card dark:bg-gray-800 dark:border-gray-700 p-8 space-y-6 shadow-xl">
+            <div className="hidden">
+            </div>
+
+            <div ref={typingAreaRef} className="exam-card dark:bg-gray-800 dark:border-gray-700 p-8 space-y-6 shadow-xl">
               <div 
                 ref={scrollRef}
                 className="relative text-2xl leading-relaxed font-mono text-gray-400 dark:text-gray-600 select-none h-72 overflow-y-auto pr-4 custom-scrollbar bg-gray-50/50 dark:bg-gray-900/30 p-6 rounded-xl border border-gray-100 dark:border-gray-800"
