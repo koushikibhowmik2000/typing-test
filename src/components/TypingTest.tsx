@@ -15,6 +15,7 @@ interface TypingTestProps {
 
 const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
   const [examType, setExamType] = useState<ExamType | null>(null);
+  const [sscDuration, setSscDuration] = useState<number>(15);
   const [textWords, setTextWords] = useState<string[]>([]);
   const [state, setState] = useState<TypingState>({
     isActive: false,
@@ -27,9 +28,9 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
     originalText: '',
     backspaceCount: 0,
     mistypedKeys: {},
+    stats: null,
   });
   const [timeLeft, setTimeLeft] = useState(15 * 60);
-  const [stats, setStats] = useState<TestStats | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
@@ -78,7 +79,11 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
     }
   }, [countdown]);
 
-  const getDuration = (type: ExamType | null) => type === 'RRB' ? 10 * 60 : 15 * 60;
+  const getDuration = (type: ExamType | null) => {
+    if (type === 'RRB') return 10 * 60;
+    if (type === 'SSC') return sscDuration * 60;
+    return 15 * 60;
+  };
 
   const startTest = () => {
     const randomText = EXAM_TEXTS[Math.floor(Math.random() * EXAM_TEXTS.length)];
@@ -94,9 +99,9 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
       originalText: randomText,
       backspaceCount: 0,
       mistypedKeys: {},
+      stats: null,
     });
     setTimeLeft(getDuration(examType));
-    setStats(null);
     
     console.log('TypingTest: startTest called, audioRef.current:', audioRef.current);
     if (audioRef.current) {
@@ -138,8 +143,8 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
       originalText: '',
       backspaceCount: 0,
       mistypedKeys: {},
+      stats: null,
     });
-    setStats(null);
     setJustUnlocked([]);
     if (timerRef.current) clearInterval(timerRef.current);
   };
@@ -163,7 +168,7 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
     };
   }, [state.isActive]);
 
-  const finishTest = async () => {
+  const finishTest = async (finalInput?: string, finalWordIndex?: number, finalIncorrectWords?: any[]) => {
     if (audioRef.current) {
       try {
         audioRef.current.pause();
@@ -173,10 +178,16 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
         console.error('TypingTest: Error pausing audio:', e);
       }
     }
+    
     const duration = getDuration(examType);
     const isEarly = timeLeft > 0;
-    setState(prev => ({ ...prev, isActive: false, isFinished: true }));
-    const finalStats = calculateStats(duration);
+    
+    const inputToUse = finalInput !== undefined ? finalInput : state.userInput;
+    const wordIndexToUse = finalWordIndex !== undefined ? finalWordIndex : state.currentWordIndex;
+    const incorrectWordsToUse = finalIncorrectWords !== undefined ? finalIncorrectWords : state.incorrectWords;
+
+    const finalStats = calculateStats(duration, inputToUse, wordIndexToUse, incorrectWordsToUse);
+    setState(prev => ({ ...prev, isActive: false, isFinished: true, stats: finalStats }));
     
     if (auth.currentUser && finalStats) {
       const newResult = {
@@ -184,13 +195,14 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
         wpm: finalStats.netWpm,
         accuracy: finalStats.accuracy,
         errors: finalStats.errors,
-        totalChars: finalStats.totalChars,
-        timeElapsed: duration - timeLeft,
+        totalChars: inputToUse.length,
+        timeElapsed: Math.round(duration - timeLeft),
         isEarlyEnd: isEarly,
         backspaceCount: state.backspaceCount,
         mistypedKeys: state.mistypedKeys,
       };
 
+      // Restore achievement logic
       const oldUnlocked = getUnlockedAchievementIds(results, profile);
       const newUnlocked = getUnlockedAchievementIds([newResult, ...results], profile);
       const newlyUnlockedIds = newUnlocked.filter(id => !oldUnlocked.includes(id));
@@ -199,7 +211,11 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
         setJustUnlocked(ACHIEVEMENTS.filter(a => newlyUnlockedIds.includes(a.id)));
       }
 
-      await saveTestResult(auth.currentUser.uid, newResult);
+      try {
+        await saveTestResult(auth.currentUser.uid, newResult);
+      } catch (error) {
+        console.error("Error saving result:", error);
+      }
     }
 
     confetti({
@@ -209,25 +225,28 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
     });
   };
 
-  const calculateStats = (duration: number) => {
-    const totalChars = state.userInput.length; // This needs to be updated for word-based typing
-    const wordsTyped = state.currentWordIndex;
+  const calculateStats = (duration: number, input: string, wordIdx: number, incorrectWordsList: any[]) => {
+    const totalChars = input.length;
     const timeInMinutes = (duration - timeLeft) / 60 || 0.01;
-    const grossWpm = Math.round(wordsTyped / timeInMinutes);
     
-    const accuracy = state.currentWordIndex > 0 ? Math.round(((state.currentWordIndex - state.incorrectWords.length) / state.currentWordIndex) * 100) : 0;
+    // Standard WPM: (characters / 5) / minutes
+    const grossWpm = Math.round((totalChars / 5) / timeInMinutes);
+    
+    // Accuracy based on words
+    const accuracy = wordIdx > 0 ? Math.round(((wordIdx - incorrectWordsList.length) / wordIdx) * 100) : 0;
+    
+    // Net WPM
+    const netWpm = Math.max(0, Math.round(grossWpm * (accuracy / 100)));
 
-    const finalStats = {
-      wpm: Math.round(((state.currentWordIndex - state.incorrectWords.length) / 5) / timeInMinutes),
+    return {
+      wpm: netWpm,
       accuracy,
-      errors: state.errors,
-      totalChars: state.originalText.length,
-      timeElapsed: duration - timeLeft,
+      errors: incorrectWordsList.length,
+      totalChars: totalChars,
+      timeElapsed: Math.round(duration - timeLeft),
       grossWpm,
-      netWpm: Math.round(((state.currentWordIndex - state.incorrectWords.length) / 5) / timeInMinutes)
+      netWpm
     };
-    setStats(finalStats);
-    return finalStats;
   };
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -249,10 +268,22 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
     let errors = 0;
     const incorrectWords: { expected: string; actual: string; index: number }[] = [];
 
-    for (let i = 0; i < typedWords.length - 1; i++) {
-      if (typedWords[i] !== textWords[i]) {
-        errors++;
-        incorrectWords.push({ expected: textWords[i], actual: typedWords[i], index: i });
+    for (let i = 0; i < typedWords.length; i++) {
+      const typed = typedWords[i];
+      const expected = textWords[i];
+      
+      // If it's a completed word (not the last one being typed)
+      if (i < currentWordIndex) {
+        if (typed !== expected) {
+          errors++;
+          incorrectWords.push({ expected: expected || '', actual: typed, index: i });
+        }
+      } else {
+        // For the current word, we only count it as an error if it's already longer or different
+        // and doesn't match the start of the expected word.
+        // However, standard typing tests usually only count errors on completed words.
+        // To be "systematic", we'll stick to completed words for the error count
+        // but we could track real-time errors here if needed.
       }
     }
 
@@ -265,7 +296,7 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
     }));
 
     if (typedWords.length > textWords.length) {
-      finishTest();
+      finishTest(value, currentWordIndex, incorrectWords);
     }
   };
 
@@ -305,7 +336,25 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
               </div>
               <div>
                 <h2 className="text-2xl font-bold text-gray-800 dark:text-white">SSC Typing Test</h2>
-                <p className="text-gray-500 dark:text-gray-400 mt-2">15 Minutes | Backspace Allowed | High Accuracy</p>
+                <div className="flex gap-2 justify-center mt-2">
+                  {[5, 10, 15].map(m => (
+                    <button 
+                      key={m}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSscDuration(m);
+                      }}
+                      className={cn(
+                        "px-3 py-1 rounded-md text-xs font-bold transition-all",
+                        sscDuration === m 
+                          ? "bg-blue-600 text-white shadow-md" 
+                          : "bg-gray-100 dark:bg-gray-700 text-gray-500 hover:bg-gray-200"
+                      )}
+                    >
+                      {m} Min
+                    </button>
+                  ))}
+                </div>
               </div>
               <ul className="text-left space-y-2 text-sm text-gray-600 dark:text-gray-400 w-full">
                 <li className="flex items-center gap-2"><CheckCircle2 size={16} className="text-green-500" /> Standard SSC CHSL/CGL Pattern</li>
@@ -357,7 +406,7 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
                 className="p-6 bg-blue-50 dark:bg-blue-900/20 rounded-2xl border border-blue-100 dark:border-blue-900/30"
               >
                 <p className="text-blue-600 dark:text-blue-400 text-xs font-bold uppercase tracking-widest mb-1">Net Speed</p>
-                <p className="text-5xl font-black text-blue-700 dark:text-blue-300">{stats?.netWpm} <span className="text-sm font-normal">WPM</span></p>
+                <p className="text-5xl font-black text-blue-700 dark:text-blue-300">{state.stats?.netWpm} <span className="text-sm font-normal">WPM</span></p>
               </motion.div>
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
@@ -366,7 +415,7 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
                 className="p-6 bg-green-50 dark:bg-green-900/20 rounded-2xl border border-green-100 dark:border-green-900/30"
               >
                 <p className="text-green-600 dark:text-green-400 text-xs font-bold uppercase tracking-widest mb-1">Accuracy</p>
-                <p className="text-5xl font-black text-green-700 dark:text-green-300">{stats?.accuracy}%</p>
+                <p className="text-5xl font-black text-green-700 dark:text-green-300">{state.stats?.accuracy}%</p>
               </motion.div>
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
@@ -375,7 +424,7 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
                 className="p-6 bg-gray-50 dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700"
               >
                 <p className="text-gray-500 dark:text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Gross Speed</p>
-                <p className="text-5xl font-black text-gray-700 dark:text-gray-200">{stats?.grossWpm} <span className="text-sm font-normal">WPM</span></p>
+                <p className="text-5xl font-black text-gray-700 dark:text-gray-200">{state.stats?.grossWpm} <span className="text-sm font-normal">WPM</span></p>
               </motion.div>
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
@@ -384,7 +433,7 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
                 className="p-6 bg-red-50 dark:bg-red-900/20 rounded-2xl border border-red-100 dark:border-red-900/30"
               >
                 <p className="text-red-600 dark:text-red-400 text-xs font-bold uppercase tracking-widest mb-1">Errors</p>
-                <p className="text-5xl font-black text-red-700 dark:text-red-300">{stats?.errors}</p>
+                <p className="text-5xl font-black text-red-700 dark:text-red-300">{state.stats?.errors}</p>
               </motion.div>
             </div>
 
@@ -497,7 +546,7 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
                   <Music size={20} />
                 </button>
                 <button 
-                  onClick={finishTest}
+                  onClick={() => finishTest()}
                   className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-md transition-colors text-sm font-bold"
                   title="End Test Early"
                 >
@@ -525,21 +574,8 @@ const TypingTest: React.FC<TypingTestProps> = ({ results, profile }) => {
                 className="relative text-2xl leading-relaxed font-mono text-gray-400 dark:text-gray-600 select-none h-72 overflow-y-auto pr-4 custom-scrollbar bg-gray-50/50 dark:bg-gray-900/30 p-6 rounded-xl border border-gray-100 dark:border-gray-800 block"
               >
                 {textWords.map((word, index) => {
-                  let color = 'text-gray-400 dark:text-gray-500';
-                  let underline = '';
-                  
-                  if (index < state.currentWordIndex) {
-                    // Word already typed, no green effect
-                    color = 'text-gray-800 dark:text-gray-200';
-                  }
-                  
-                  if (index === state.currentWordIndex) {
-                    underline = 'bg-blue-100 dark:bg-blue-900/40 border-b-2 border-blue-500 animate-pulse';
-                    color = 'text-gray-900 dark:text-white font-bold';
-                  }
-
                   return (
-                    <span key={index} ref={index === state.currentWordIndex ? activeWordRef : null} className={cn(color, underline, "mr-2 inline-block mb-2")}>
+                    <span key={index} ref={index === state.currentWordIndex ? activeWordRef : null} className="text-gray-700 dark:text-gray-300 mr-2 inline-block mb-2">
                       {word}
                     </span>
                   );

@@ -25,8 +25,8 @@ const Analysis: React.FC<AnalysisProps> = ({ results, profile, darkMode }) => {
     const stats: Record<string, { wpmSum: number; count: number; maxWpm: number; ssc: any[]; rrb: any[] }> = {};
     
     results.forEach(r => {
-      if (!r.timestamp) return;
-      const date = new Date(r.timestamp.toDate ? r.timestamp.toDate() : r.timestamp).toLocaleDateString();
+      const timestamp = r.timestamp?.toDate ? r.timestamp.toDate() : (r.timestamp || new Date());
+      const date = new Date(timestamp).toLocaleDateString();
       if (!stats[date]) {
         stats[date] = { wpmSum: 0, count: 0, maxWpm: 0, ssc: [], rrb: [] };
       }

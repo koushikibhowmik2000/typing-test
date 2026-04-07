@@ -21,4 +21,5 @@ export interface TypingState {
   originalText: string;
   backspaceCount: number;
   mistypedKeys: Record<string, number>;
+  stats: TestStats | null;
 }
